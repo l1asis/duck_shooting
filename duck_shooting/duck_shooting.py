@@ -1,4 +1,5 @@
-import pygame, sys, random
+import sys, random
+import pygame
 
 class Text(pygame.sprite.Sprite):
     def __init__(self, text, font: pygame.font.Font, color, pos):
@@ -19,6 +20,20 @@ class TextVariable(Text):
         self.image = font.render(f"{self.text}: {self.value}", True, self.color)
 
 
+class Score():
+    def __init__(self):
+        self.group = pygame.sprite.GroupSingle()
+        self.score = TextVariable("Score", 0, font, (42,42,42), (130,32))
+        self.group.add(self.score)
+
+    def update(self, num):
+        self.score.value += num
+
+    def draw(self, screen):
+        self.group.draw(screen)
+        self.group.update()
+        
+
 class Crosshair(pygame.sprite.Sprite):
     def __init__(self, picture_path):
         super().__init__()
@@ -26,15 +41,22 @@ class Crosshair(pygame.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.gunshot = pygame.mixer.Sound(".\\assets\\gunshot.mp3")
         self.gunshot.set_volume(0.2)
+        self.update_targets(pygame.sprite.Group())
 
     def shoot(self):
         self.gunshot.play()
-        shooted = pygame.sprite.spritecollide(crosshair, target_group, dokill=True)
+        shooted = pygame.sprite.spritecollide(crosshair, self.targets, dokill=True)
         if shooted:
-            score.value += len(shooted)*10
+            return len(shooted)*10
+        else:
+            return 0
         
     def update(self):
         self.rect.center = pygame.mouse.get_pos()
+
+    def update_targets(self, targets):
+        self.targets = targets
+
 
 class Target(pygame.sprite.Sprite):
     def __init__(self, picture_path, pos_x, pos_y):
@@ -42,6 +64,50 @@ class Target(pygame.sprite.Sprite):
         self.image = pygame.image.load(picture_path)
         self.rect = self.image.get_rect()
         self.rect.center = (pos_x, pos_y)
+
+class Level1():
+    def __init__(self):
+        self.state = "active"
+
+        self.score = Score()
+
+        bullets_used, bullets_max = 0, 5
+        bullet_group = pygame.sprite.Group()
+
+        shooted_targets, targets_to_win = 0, 30
+
+        self.target_group = pygame.sprite.Group()
+        for target in range(30):
+            pos_x, pos_y = random.randrange(32,width-32), random.randrange(32,height-32) # Random position for target
+            new_target = Target(".\\assets\\target.png", pos_x, pos_y)
+            while pygame.sprite.spritecollide(new_target, self.target_group, dokill=False): # Checking if the new target slips with another
+                pos_x, pos_y = random.randrange(32,width-32), random.randrange(32,height-32)
+                new_target = Target(".\\assets\\target.png", pos_x, pos_y)
+            self.target_group.add(new_target)
+
+        crosshair.update_targets(self.target_group)
+
+    def event(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self.score.update(crosshair.shoot())
+
+    def update(self):
+        screen.blit(background,(0,0))
+        self.target_group.draw(screen)
+        self.score.draw(screen)
+
+        if self.score.score.value >= 300:
+            print(f"End of the Level 1! with {self.score.score.value}")
+            self.state = "inactive"
+
+        crosshair_group.draw(screen)
+        crosshair_group.update()
+        pygame.display.flip()
+
 
 class GameState():
     def __init__(self):
@@ -56,7 +122,7 @@ class GameState():
                 pos = pygame.mouse.get_pos()
                 if play_text.rect.collidepoint(pos):
                     crosshair.shoot()
-                    self.state = "level_1"
+                    self.state = "load_level"
                 elif exit_text.rect.collidepoint(pos):
                     pygame.quit()
                     sys.exit()
@@ -70,30 +136,21 @@ class GameState():
         fps_group.draw(screen)
         pygame.display.flip()
     
-    def level_1(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                crosshair.shoot()
-    
-        screen.blit(background,(0,0))
-        target_group.draw(screen)
-        score_group.draw(screen)
-        score_group.update()
-        if score.value >= 300:
-            print("You won!")
-            self.state = "intro"
-        crosshair_group.draw(screen)
-        crosshair_group.update()
-        pygame.display.flip()
+    def load_level(self):
+        self.level = Level1()
+        self.state = "level1"
 
     def state_manager(self):
         if self.state == "intro":
             self.intro()
-        elif self.state == "level_1":
-            self.level_1()
+        elif self.state == "load_level":
+            self.load_level()
+        elif self.state.startswith("level"):
+            self.level.event()
+            self.level.update()
+            if self.level.state == "inactive":
+                self.state = "intro"
+        
             
 
 # Display stretching prevention
@@ -127,25 +184,6 @@ pygame.mouse.set_visible(False)
 crosshair = Crosshair(".\\assets\\crosshairs\\crosshair_white_large.png")
 crosshair_group = pygame.sprite.Group()
 crosshair_group.add(crosshair)
-
-# Level 1
-score_group = pygame.sprite.GroupSingle()
-score = TextVariable("Score", 0, font, (42,42,42), (130,32))
-score_group.add(score)
-bullets_used, bullets_max = 0, 5
-bullet_group = pygame.sprite.Group()
-
-shooted_targets, targets_to_win = 0, 30
-
-
-target_group = pygame.sprite.Group()
-for target in range(30):
-    pos_x, pos_y = random.randrange(32,width-32), random.randrange(32,height-32) # Random position for target
-    new_target = Target(".\\assets\\target.png", pos_x, pos_y)
-    while pygame.sprite.spritecollide(new_target, target_group, dokill=False): # Checking if the new target slips with another
-        pos_x, pos_y = random.randrange(32,width-32), random.randrange(32,height-32)
-        new_target = Target(".\\assets\\target.png", pos_x, pos_y)
-    target_group.add(new_target)
 
 
 while True:
