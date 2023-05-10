@@ -23,7 +23,7 @@ class TextVariable(Text):
 class Score():
     def __init__(self):
         self.group = pygame.sprite.GroupSingle()
-        self.score = TextVariable("Score", 0, font, (42,42,42), (130,32))
+        self.score = TextVariable("Score", 0, font, (255,255,255), (130,32))
         self.group.add(self.score)
 
     def update(self, num):
@@ -69,7 +69,26 @@ class Bullets():
             bullet.image = self.images["loaded"]
         self.used = 0
 
-        
+
+class Timer():
+    ENDLEVEL = pygame.USEREVENT + 0
+    def __init__(self, event, seconds, loops):
+        milis = seconds * 1000
+        self.start_ticks = pygame.time.get_ticks()
+        self.group = pygame.sprite.GroupSingle()
+        self.timer = TextVariable("Time", 0, font, (255,255,255), (600,32))
+        self.group.add(self.timer)
+        pygame.time.set_timer(event, milis, loops)
+
+    def get_seconds(self):
+        now_ticks = pygame.time.get_ticks()
+        seconds = (now_ticks - self.start_ticks) // 1000
+        return seconds
+    
+    def draw(self, screen):
+        self.timer.value = self.get_seconds()
+        self.group.update()
+        self.group.draw(screen)
 
 class Crosshair(pygame.sprite.Sprite):
     def __init__(self, picture_path):
@@ -116,6 +135,7 @@ class Level1():
     def __init__(self):
         self.state = "active"
 
+        self.timer = Timer(Timer.ENDLEVEL, 20, 1)
         self.score = Score()
         self.bullets = Bullets(6)
 
@@ -146,17 +166,16 @@ class Level1():
                 if event.key == pygame.K_r and self.bullets.used == self.bullets.max_used:
                     crosshair.reload()
                     self.bullets.loaded()
+            elif event.type == Timer.ENDLEVEL:
+                print(f"Time out! Your score is: {self.score.score.value}")
+                self.state = "inactive"
 
     def update(self):
         screen.blit(background,(0,0))
         self.target_group.draw(screen)
         self.bullets.draw(screen)
         self.score.draw(screen)
-
-        if self.score.score.value >= 300:
-            print(f"End of the Level 1! with {self.score.score.value}")
-            self.state = "inactive"
-
+        self.timer.draw(screen)
         crosshair_group.draw(screen)
         crosshair_group.update()
         pygame.display.flip()
