@@ -32,6 +32,43 @@ class Score():
     def draw(self, screen):
         self.group.draw(screen)
         self.group.update()
+
+class Bullet(pygame.sprite.Sprite):
+    def __init__(self, image, pos_x, pos_y):
+        super().__init__()
+        self.image = image
+        self.rect = self.image.get_rect()
+        self.rect.center = (pos_x, pos_y)
+
+class Bullets():
+    def __init__(self, max) -> None:
+        self.distance_x, self.distance_y = 20, 15
+        self.used, self.max_used = 0, max
+
+        self.images = {"loaded": pygame.image.load(".\\assets\\bullets\\icon_bullet_silver_long.png"),
+                       "empty": pygame.image.load(".\\assets\\bullets\\icon_bullet_empty_long.png")}
+        for bullet_type in self.images.keys():
+            self.images[bullet_type] = pygame.transform.smoothscale_by(self.images[bullet_type], 1.45)
+
+        self.group = pygame.sprite.Group()
+        for num in range(1, self.max_used+1):
+            self.group.add(Bullet(self.images["loaded"],
+                                  1280-(self.images["loaded"].get_width()*num) - self.distance_x*num,
+                                  720-(self.images["loaded"].get_height()) - self.distance_y ))
+    
+    def draw(self, screen):
+        self.group.draw(screen)
+
+    def shooted(self, used_bullet):
+        for index, bullet in enumerate(self.group):
+            if index == used_bullet:
+                bullet.image = self.images["empty"]
+    
+    def loaded(self):
+        for bullet in self.group:
+            bullet.image = self.images["loaded"]
+        self.used = 0
+
         
 
 class Crosshair(pygame.sprite.Sprite):
@@ -40,7 +77,11 @@ class Crosshair(pygame.sprite.Sprite):
         self.image = pygame.image.load(picture_path)
         self.rect = self.image.get_rect()
         self.gunshot = pygame.mixer.Sound(".\\assets\\gunshot.mp3")
+        self.empty_gunshot = pygame.mixer.Sound(".\\assets\\empty-gunshot.mp3")
+        self.reload_sound = pygame.mixer.Sound(".\\assets\\reload.mp3")
         self.gunshot.set_volume(0.2)
+        self.empty_gunshot.set_volume(0.2)
+        self.reload_sound.set_volume(0.2)
         self.update_targets(pygame.sprite.Group())
 
     def shoot(self):
@@ -50,6 +91,12 @@ class Crosshair(pygame.sprite.Sprite):
             return len(shooted)*10
         else:
             return 0
+        
+    def empty_shoot(self):
+        self.empty_gunshot.play()
+
+    def reload(self):
+        self.reload_sound.play()
         
     def update(self):
         self.rect.center = pygame.mouse.get_pos()
@@ -70,11 +117,7 @@ class Level1():
         self.state = "active"
 
         self.score = Score()
-
-        bullets_used, bullets_max = 0, 5
-        bullet_group = pygame.sprite.Group()
-
-        shooted_targets, targets_to_win = 0, 30
+        self.bullets = Bullets(6)
 
         self.target_group = pygame.sprite.Group()
         for target in range(30):
@@ -93,11 +136,21 @@ class Level1():
                 pygame.quit()
                 sys.exit()
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self.score.update(crosshair.shoot())
+                if self.bullets.used != self.bullets.max_used:
+                    self.score.update(crosshair.shoot())
+                    self.bullets.shooted(self.bullets.used)
+                    self.bullets.used += 1
+                else:
+                    crosshair.empty_shoot()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r and self.bullets.used == self.bullets.max_used:
+                    crosshair.reload()
+                    self.bullets.loaded()
 
     def update(self):
         screen.blit(background,(0,0))
         self.target_group.draw(screen)
+        self.bullets.draw(screen)
         self.score.draw(screen)
 
         if self.score.score.value >= 300:
