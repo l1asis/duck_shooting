@@ -4,12 +4,12 @@ import pygame
 class Text(pygame.sprite.Sprite):
     def __init__(self, text, font: pygame.font.Font, color, pos):
         super().__init__()
-        self.image = font.render(text, True, color)
+        self.image = font.render(text, True, color).convert_alpha()
         self.rect = self.image.get_rect()
         self.rect.center = pos
         self.color = color
     def update(self, text):
-        self.image = font.render(text, True, self.color)
+        self.image = font.render(text, True, self.color).convert_alpha()
 
 class TextVariable(Text):
     def __init__(self, text, value, font: pygame.font.Font, color, pos):
@@ -17,7 +17,18 @@ class TextVariable(Text):
         self.value = value
         super().__init__(f"{self.text}: {self.value}", font, color, pos)
     def update(self):
-        self.image = font.render(f"{self.text}: {self.value}", True, self.color)
+        self.image = font.render(f"{self.text}: {self.value}", True, self.color).convert_alpha()
+
+
+class Spritesheet():
+    def __init__(self, sheet_path):
+        self.sheet = pygame.image.load(sheet_path).convert_alpha()
+    def get_images(self, width, height):
+        images = []
+        top = 0
+        for left in range(0, self.sheet.get_width(), width):
+            images.append(self.sheet.subsurface(left, top, width, height).convert_alpha())
+        return images
 
 
 class Score():
@@ -45,8 +56,8 @@ class Bullets():
         self.distance_x, self.distance_y = 20, 15
         self.used, self.max_used = 0, max
 
-        self.images = {"loaded": pygame.image.load(".\\assets\\bullets\\icon_bullet_silver_long.png"),
-                       "empty": pygame.image.load(".\\assets\\bullets\\icon_bullet_empty_long.png")}
+        self.images = {"loaded": pygame.image.load(".\\assets\\bullets\\icon_bullet_silver_long.png").convert_alpha(),
+                       "empty": pygame.image.load(".\\assets\\bullets\\icon_bullet_empty_long.png").convert_alpha()}
         for bullet_type in self.images.keys():
             self.images[bullet_type] = pygame.transform.smoothscale_by(self.images[bullet_type], 1.45)
 
@@ -72,8 +83,10 @@ class Bullets():
 
 class Timer():
     ENDLEVEL = pygame.USEREVENT + 0
+    REMOVETARGET = pygame.USEREVENT + 1
+    GENERATETARGET = pygame.USEREVENT + 2
     def __init__(self, event, seconds, loops):
-        milis = seconds * 1000
+        milis = int(seconds * 1000)
         self.start_ticks = pygame.time.get_ticks()
         self.group = pygame.sprite.GroupSingle()
         self.timer = TextVariable("Time", 0, font, (255,255,255), (600,32))
@@ -93,11 +106,11 @@ class Timer():
 class Crosshair(pygame.sprite.Sprite):
     def __init__(self, picture_path):
         super().__init__()
-        self.image = pygame.image.load(picture_path)
+        self.image = pygame.image.load(picture_path).convert_alpha()
         self.rect = self.image.get_rect()
-        self.gunshot = pygame.mixer.Sound(".\\assets\\gunshot.mp3")
-        self.empty_gunshot = pygame.mixer.Sound(".\\assets\\empty-gunshot.mp3")
-        self.reload_sound = pygame.mixer.Sound(".\\assets\\reload.mp3")
+        self.gunshot = pygame.mixer.Sound(".\\assets\\sounds\\gunshot.mp3")
+        self.empty_gunshot = pygame.mixer.Sound(".\\assets\\sounds\\empty-gunshot.mp3")
+        self.reload_sound = pygame.mixer.Sound(".\\assets\\sounds\\reload.mp3")
         self.gunshot.set_volume(0.2)
         self.empty_gunshot.set_volume(0.2)
         self.reload_sound.set_volume(0.2)
@@ -105,8 +118,10 @@ class Crosshair(pygame.sprite.Sprite):
 
     def shoot(self):
         self.gunshot.play()
-        shooted = pygame.sprite.spritecollide(crosshair, self.targets, dokill=True)
+        shooted = pygame.sprite.spritecollide(crosshair, self.targets, dokill=False)
         if shooted:
+            for target in shooted:
+                target.animate(2)
             return len(shooted)*10
         else:
             return 0
@@ -125,30 +140,82 @@ class Crosshair(pygame.sprite.Sprite):
 
 
 class Target(pygame.sprite.Sprite):
-    def __init__(self, picture_path, pos_x, pos_y):
+    RED_ONE = 0
+    DUCK = 1
+    def __init__(self, target_type, pos_x, pos_y):
         super().__init__()
-        self.image = pygame.image.load(picture_path)
+        self.is_animating = False
+        self.current_sprite = 0
+        self.target_type = target_type
+        self.image = self.get_images(target_type)[self.current_sprite]
         self.rect = self.image.get_rect()
         self.rect.center = (pos_x, pos_y)
+        self.rect.left -= 4
+        self.rect.right -= 4
+
+    def animate(self, times_repeat):
+        self.is_animating = 1
+        self.times_repeat = times_repeat
+
+    @classmethod
+    def get_images(self, target_type):
+        if target_type == Target.RED_ONE:
+            return red_target_images
+        elif target_type == Target.DUCK:
+            return NotImplemented
+
+    def update(self):
+        if self.is_animating:
+            images = self.get_images(self.target_type)
+            self.current_sprite += 2 # if 1, then 1 sprite per 1 frame (ticks speed) | if < 1, then 1 sprite per (1 / speed) frames
+            if self.current_sprite >= len(images):
+                self.current_sprite = 0
+                if not self.times_repeat:
+                    self.is_animating = False
+                    self.kill()
+                    del self
+                    return
+                else:
+                    self.times_repeat -= 1
+            self.image = images[int(self.current_sprite)]
+            
+
 
 class Level1():
     def __init__(self):
         self.state = "active"
-
-        self.timer = Timer(Timer.ENDLEVEL, 20, 1)
+        
+        self.duration = 45
+        self.timer = Timer(Timer.ENDLEVEL, self.duration, 1)
+        random_gen_wait = random.uniform(0.1, 1.5)
+        Timer(Timer.GENERATETARGET, random_gen_wait, self.duration)
         self.score = Score()
         self.bullets = Bullets(6)
 
         self.target_group = pygame.sprite.Group()
-        for target in range(30):
-            pos_x, pos_y = random.randrange(32,width-32), random.randrange(32,height-32) # Random position for target
-            new_target = Target(".\\assets\\target.png", pos_x, pos_y)
-            while pygame.sprite.spritecollide(new_target, self.target_group, dokill=False): # Checking if the new target slips with another
-                pos_x, pos_y = random.randrange(32,width-32), random.randrange(32,height-32)
-                new_target = Target(".\\assets\\target.png", pos_x, pos_y)
-            self.target_group.add(new_target)
+        self.shooted_target_group = pygame.sprite.Group()
+        self.generate_targets(Target.RED_ONE, 15)
 
         crosshair.update_targets(self.target_group)
+
+    def generate_targets(self, target_type, count):
+        for target in range(count):
+            pos_x, pos_y = random.randrange(110,width-110), 465 # Random position for target
+            new_target = Target(target_type, pos_x, pos_y)
+            if pygame.sprite.spritecollide(new_target, self.target_group, dokill=False):
+                continue
+            else:
+                self.target_group.add(new_target)
+            #while pygame.sprite.spritecollide(new_target, self.target_group, dokill=False): # Checking if the new target slips with another
+            #    new_target.kill()
+            #    del new_target
+            #    if faults == 5:
+            #        break
+            #    pos_x, pos_y = random.randrange(110,width-110), 465
+            #    new_target = Target(target_type, pos_x, pos_y)
+            #    faults += 1
+            #if faults != 5:
+            #    self.target_group.add(new_target)
 
     def event(self):
         for event in pygame.event.get():
@@ -169,15 +236,24 @@ class Level1():
             elif event.type == Timer.ENDLEVEL:
                 print(f"Time out! Your score is: {self.score.score.value}")
                 self.state = "inactive"
+            elif event.type == Timer.GENERATETARGET:
+                random.seed()
+                random_count = random.randint(1,2)
+                self.generate_targets(Target.RED_ONE, random_count)
+                random_gen_wait = random.uniform(0.1, 1.5)
+                Timer(Timer.GENERATETARGET, random_gen_wait, 0)
 
     def update(self):
         screen.blit(background,(0,0))
         self.target_group.draw(screen)
+        self.target_group.update()
+        self.shooted_target_group.draw(screen)
         self.bullets.draw(screen)
         self.score.draw(screen)
         self.timer.draw(screen)
         crosshair_group.draw(screen)
         crosshair_group.update()
+        #pygame.display.set_caption(str(clock.get_fps()))
         pygame.display.flip()
 
 
@@ -239,7 +315,7 @@ screen = pygame.display.set_mode(size)
 
 # Intro
 distance_text = 45
-background = pygame.image.load(".\\assets\\main_menu_bg.png")
+background = pygame.image.load(".\\assets\\main_menu_bg.png").convert()
 font = pygame.font.SysFont("Comic Sans MS", 56, True)
 text_group = pygame.sprite.Group()
 play_text = Text("Play", font, (255,255,255), (width/2, (height/2)-distance_text))
@@ -257,7 +333,10 @@ crosshair = Crosshair(".\\assets\\crosshairs\\crosshair_white_large.png")
 crosshair_group = pygame.sprite.Group()
 crosshair_group.add(crosshair)
 
+#Spritesheets
+red_target_images = Spritesheet(".\\assets\\targets\\target2_spritesheet_360degree.png").get_images(104, 190)
 
-while True:
+
+while 1:
     game_state.state_manager()
     clock.tick(60)
