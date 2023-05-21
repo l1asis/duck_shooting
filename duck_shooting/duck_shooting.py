@@ -1,5 +1,7 @@
-import sys, random
+import sys, random, time
 import pygame
+
+from typing import List
 
 class Text(pygame.sprite.Sprite):
     def __init__(self, text, font: pygame.font.Font, color, pos):
@@ -23,12 +25,12 @@ class TextVariable(Text):
 class Spritesheet():
     def __init__(self, sheet_path):
         self.sheet = pygame.image.load(sheet_path).convert_alpha()
-    def get_images(self, width, height):
-        images = []
+    def get_frames(self, width, height) -> List[pygame.Surface]:
+        frames = []
         top = 0
         for left in range(0, self.sheet.get_width(), width):
-            images.append(self.sheet.subsurface(left, top, width, height).convert_alpha())
-        return images
+            frames.append(self.sheet.subsurface(left, top, width, height).convert_alpha())
+        return frames
 
 
 class Score():
@@ -41,8 +43,8 @@ class Score():
         self.score.value += num
 
     def draw(self, screen):
-        self.group.draw(screen)
         self.group.update()
+        self.group.draw(screen)
 
 class Bullet(pygame.sprite.Sprite):
     def __init__(self, image, pos_x, pos_y):
@@ -120,9 +122,12 @@ class Crosshair(pygame.sprite.Sprite):
         self.gunshot.play()
         shooted = pygame.sprite.spritecollide(crosshair, self.targets, dokill=False)
         if shooted:
+            positives = 0
             for target in shooted:
-                target.animate(2)
-            return len(shooted)*10
+                if target.animation != Target.ANIMATION_SHOOTED:
+                    target.use_animation(Target.ANIMATION_SHOOTED, 1)
+                    positives += 1
+            return positives*10
         else:
             return 0
         
@@ -138,53 +143,72 @@ class Crosshair(pygame.sprite.Sprite):
     def update_targets(self, targets):
         self.targets = targets
 
-
 class Target(pygame.sprite.Sprite):
     RED_ONE = 0
     DUCK = 1
+    ANIMATION_SHOOTED = 10
+    ANIMATION_DISAPPEARED = 11
     def __init__(self, target_type, pos_x, pos_y):
         super().__init__()
-        self.is_animating = False
-        self.current_sprite = 0
         self.target_type = target_type
-        self.image = self.get_images(target_type)[self.current_sprite]
-        self.rect = self.image.get_rect()
-        self.rect.center = (pos_x, pos_y)
-        self.rect.left -= 4
-        self.rect.right -= 4
+        
+        # animation
+        self.animation = None
+        self.frames = self.get_frames(self.target_type)
+        self.frame_index = 0
 
-    def animate(self, times_repeat):
-        self.is_animating = 1
+        # image & rect
+        self.image = self.frames[self.frame_index]
+        self.rect = self.image.get_rect(center=(pos_x, pos_y))
+
+        # movement
+        self.direction = 1
+        self.move_speed = 100
+        self.animation_speed = 60
+
+        self.pos = pygame.math.Vector2(self.rect.topleft)
+
+    def use_animation(self, animation, times_repeat=0):
+        self.animation = animation
         self.times_repeat = times_repeat
 
+    def animate_shooted(self, dt):
+        self.frame_index += self.animation_speed * dt
+        if self.frame_index >= len(self.frames):
+            if self.times_repeat:
+                self.times_repeat -= 1
+            else:
+                self.kill()
+            self.frame_index = 0
+        self.image = self.frames[int(self.frame_index)]
+
+    def animate_disappeared(self, dt):
+        self.pos.y += self.direction * self.move_speed * dt
+        self.rect.x = round(self.pos.x)
+        self.rect.y = round(self.pos.y)
+        if self.rect.top > 560:
+            self.kill()
+
     @classmethod
-    def get_images(self, target_type):
+    def get_frames(self, target_type):
         if target_type == Target.RED_ONE:
-            return red_target_images
+            return red_target_frames
         elif target_type == Target.DUCK:
             return NotImplemented
 
-    def update(self):
-        if self.is_animating:
-            images = self.get_images(self.target_type)
-            self.current_sprite += 2 # if 1, then 1 sprite per 1 frame (ticks speed) | if < 1, then 1 sprite per (1 / speed) frames
-            if self.current_sprite >= len(images):
-                self.current_sprite = 0
-                if not self.times_repeat:
-                    self.is_animating = False
-                    self.kill()
-                    del self
-                    return
-                else:
-                    self.times_repeat -= 1
-            self.image = images[int(self.current_sprite)]
-            
+    def update(self, dt):
+        if self.animation:
+            if self.animation == Target.ANIMATION_SHOOTED:
+                self.animate_shooted(dt)
+            elif self.animation == Target.ANIMATION_DISAPPEARED:
+                self.animate_disappeared(dt)
 
 
 class Level1():
     def __init__(self):
         self.state = "active"
-        
+        self.prev_time = time.time()
+
         self.duration = 45
         self.timer = Timer(Timer.ENDLEVEL, self.duration, 1)
         random_gen_wait = random.uniform(0.1, 1.5)
@@ -193,7 +217,6 @@ class Level1():
         self.bullets = Bullets(6)
 
         self.target_group = pygame.sprite.Group()
-        self.shooted_target_group = pygame.sprite.Group()
         self.generate_targets(Target.RED_ONE, 15)
 
         crosshair.update_targets(self.target_group)
@@ -206,16 +229,6 @@ class Level1():
                 continue
             else:
                 self.target_group.add(new_target)
-            #while pygame.sprite.spritecollide(new_target, self.target_group, dokill=False): # Checking if the new target slips with another
-            #    new_target.kill()
-            #    del new_target
-            #    if faults == 5:
-            #        break
-            #    pos_x, pos_y = random.randrange(110,width-110), 465
-            #    new_target = Target(target_type, pos_x, pos_y)
-            #    faults += 1
-            #if faults != 5:
-            #    self.target_group.add(new_target)
 
     def event(self):
         for event in pygame.event.get():
@@ -244,17 +257,19 @@ class Level1():
                 Timer(Timer.GENERATETARGET, random_gen_wait, 0)
 
     def update(self):
+        dt = time.time() - self.prev_time
+        self.prev_time = time.time()
+
         screen.blit(background,(0,0))
+        self.target_group.update(dt)
         self.target_group.draw(screen)
-        self.target_group.update()
-        self.shooted_target_group.draw(screen)
         self.bullets.draw(screen)
         self.score.draw(screen)
         self.timer.draw(screen)
-        crosshair_group.draw(screen)
         crosshair_group.update()
+        crosshair_group.draw(screen)
         #pygame.display.set_caption(str(clock.get_fps()))
-        pygame.display.flip()
+        pygame.display.update()
 
 
 class GameState():
@@ -279,9 +294,6 @@ class GameState():
         text_group.draw(screen)
         crosshair_group.draw(screen)
         crosshair_group.update()
-        fps.value = clock.get_fps()
-        fps_group.update()
-        fps_group.draw(screen)
         pygame.display.flip()
     
     def load_level(self):
@@ -322,11 +334,6 @@ play_text = Text("Play", font, (255,255,255), (width/2, (height/2)-distance_text
 exit_text = Text("Exit", font, (255,255,255), (width/2, (height/2)+distance_text))
 text_group.add((play_text, exit_text))
 
-# FPS
-fps_group = pygame.sprite.Group()
-fps = TextVariable("FPS", 0, font, (255,255,255), (100,32))
-fps_group.add(fps)
-
 # Crosshair
 pygame.mouse.set_visible(False)
 crosshair = Crosshair(".\\assets\\crosshairs\\crosshair_white_large.png")
@@ -334,7 +341,7 @@ crosshair_group = pygame.sprite.Group()
 crosshair_group.add(crosshair)
 
 #Spritesheets
-red_target_images = Spritesheet(".\\assets\\targets\\target2_spritesheet_360degree.png").get_images(104, 190)
+red_target_frames = Spritesheet(".\\assets\\targets\\target2_spritesheet_360degree.png").get_frames(104, 190)
 
 
 while 1:
