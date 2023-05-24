@@ -2,6 +2,9 @@ import sys, random, time
 import pygame
 
 from typing import List
+from collections import defaultdict
+
+from debug import debug
 
 class Text(pygame.sprite.Sprite):
     def __init__(self, text, font: pygame.font.Font, color, pos):
@@ -17,9 +20,9 @@ class TextVariable(Text):
     def __init__(self, text, value, font: pygame.font.Font, color, pos):
         self.text = text
         self.value = value
-        super().__init__(f"{self.text}: {self.value}", font, color, pos)
+        super().__init__(f"{self.text}{self.value}", font, color, pos)
     def update(self):
-        self.image = font.render(f"{self.text}: {self.value}", True, self.color).convert_alpha()
+        self.image = font.render(f"{self.text}{self.value}", True, self.color).convert_alpha()
 
 
 class Spritesheet():
@@ -36,7 +39,7 @@ class Spritesheet():
 class Score():
     def __init__(self):
         self.group = pygame.sprite.GroupSingle()
-        self.score = TextVariable("Score", 0, font, (255,255,255), (130,32))
+        self.score = TextVariable("Score: ", 0, font, (255,255,255), (130,32))
         self.group.add(self.score)
 
     def update(self, num):
@@ -88,22 +91,30 @@ class Timer():
     REMOVETARGET = pygame.USEREVENT + 1
     GENERATETARGET = pygame.USEREVENT + 2
     def __init__(self, event, seconds, loops):
-        milis = int(seconds * 1000)
-        self.start_ticks = pygame.time.get_ticks()
-        self.group = pygame.sprite.GroupSingle()
-        self.timer = TextVariable("Time", 0, font, (255,255,255), (600,32))
-        self.group.add(self.timer)
+        self.seconds = seconds
+        milis = int(self.seconds * 1000)
         pygame.time.set_timer(event, milis, loops)
 
+    def init_text(self):
+        self.created_at = time.time()
+        self.group = pygame.sprite.GroupSingle()
+        self.text = TextVariable("Time: ", 0, font, (255,255,255), (600,32))
+        self.group.add(self.text)
+
     def get_seconds(self):
-        now_ticks = pygame.time.get_ticks()
-        seconds = (now_ticks - self.start_ticks) // 1000
-        return seconds
+        now = int(time.time() - self.created_at)
+        return now
     
     def draw(self, screen):
-        self.timer.value = self.get_seconds()
+        self.text.value = self.seconds - self.get_seconds()
         self.group.update()
         self.group.draw(screen)
+
+    @classmethod
+    def delay_generate_targets(self):
+        cooldown_seconds = random.uniform(0.1, 1.5)
+        Timer(Timer.GENERATETARGET, cooldown_seconds, 0)
+        
 
 class Crosshair(pygame.sprite.Sprite):
     def __init__(self, picture_path):
@@ -116,21 +127,52 @@ class Crosshair(pygame.sprite.Sprite):
         self.gunshot.set_volume(0.2)
         self.empty_gunshot.set_volume(0.2)
         self.reload_sound.set_volume(0.2)
-        self.update_targets(pygame.sprite.Group())
 
-    def shoot(self):
+        self.bonus_positives = defaultdict(int)
+        self.last_bonus_at = time.time()
+        self.bonus_text_created_at = time.time()
+        self.block_score_on_targets = None
+        self.bonus_text = None
+        self.bonus_text_opacity = 255
+
+    def shoot(self, targets):
         self.gunshot.play()
-        shooted = pygame.sprite.spritecollide(crosshair, self.targets, dokill=False)
+        shooted = pygame.sprite.spritecollide(crosshair, targets, dokill=False)
         if shooted:
-            positives = 0
+            positives = defaultdict(int)
             for target in shooted:
                 if target.animation != Target.ANIMATION_SHOOTED:
                     target.use_animation(Target.ANIMATION_SHOOTED, 1)
-                    positives += 1
-            return positives*10
+                    positives[target.target_type] += 1
+                    self.bonus_positives[target.target_type] += 1
+            return self.calculate_score(positives)
         else:
             return 0
-        
+    
+    def calculate_score(self, positives) -> int:
+        score_to_add = sum([target_to_score[target_type]*positives[target_type] 
+                                for target_type in positives])
+        return score_to_add
+
+    def bonus_score(self) -> int:
+        if time.time() - self.last_bonus_at <= 0.85:
+            shot_targets_count = sum(self.bonus_positives.values())
+            if shot_targets_count > 1 and self.block_score_on_targets != shot_targets_count:
+                self.block_score_on_targets = shot_targets_count
+                bonus = target_bonuses[shot_targets_count]
+                self.bonus_text = Text(f"{random.choice(fun_text_templates)} {target_multipliers_text[shot_targets_count]}",
+                            font2, (255,255,255), (width/2, 200))
+                self.bonus_text_created_at = time.time()
+                self.bonus_text_opacity = 255
+                return bonus
+            else:
+                return 0
+        else:
+            self.bonus_positives.clear()
+            self.block_score_on_targets = None
+            self.last_bonus_at = time.time()
+            return 0
+
     def empty_shoot(self):
         self.empty_gunshot.play()
 
@@ -140,20 +182,19 @@ class Crosshair(pygame.sprite.Sprite):
     def update(self):
         self.rect.center = pygame.mouse.get_pos()
 
-    def update_targets(self, targets):
-        self.targets = targets
-
 class Target(pygame.sprite.Sprite):
     RED_ONE = 0
     DUCK = 1
-    ANIMATION_SHOOTED = 10
-    ANIMATION_DISAPPEARED = 11
+    ANIMATION_IDLE = 10
+    ANIMATION_SHOOTED = 11
     def __init__(self, target_type, pos_x, pos_y):
         super().__init__()
         self.target_type = target_type
+        self.created_at = time.time()
+        self.disappear_after = random.uniform(1,3)
         
         # animation
-        self.animation = None
+        self.animation = Target.ANIMATION_IDLE
         self.frames = self.get_frames(self.target_type)
         self.frame_index = 0
 
@@ -161,10 +202,15 @@ class Target(pygame.sprite.Sprite):
         self.image = self.frames[self.frame_index]
         self.rect = self.image.get_rect(center=(pos_x, pos_y))
 
+        # score text
+        self.score = TextVariable("+", target_to_score[self.target_type], font, (255,255,255),
+                                  (self.rect.centerx+20, self.rect.centery-140))
+        self.score_opacity = 255
+
         # movement
         self.direction = 1
-        self.move_speed = 100
-        self.animation_speed = 60
+        self.move_speed = 235
+        self.animation_speed = 70
 
         self.pos = pygame.math.Vector2(self.rect.topleft)
 
@@ -173,6 +219,11 @@ class Target(pygame.sprite.Sprite):
         self.times_repeat = times_repeat
 
     def animate_shooted(self, dt):
+        screen.blit(self.score.image, (self.rect.centerx+20, self.rect.centery-140))
+        self.score.image.set_alpha(self.score_opacity)
+        self.score.image.convert_alpha()
+        self.score_opacity -= 5
+
         self.frame_index += self.animation_speed * dt
         if self.frame_index >= len(self.frames):
             if self.times_repeat:
@@ -183,6 +234,11 @@ class Target(pygame.sprite.Sprite):
         self.image = self.frames[int(self.frame_index)]
 
     def animate_disappeared(self, dt):
+        self.frame_index += self.animation_speed * dt
+        if self.frame_index >= len(self.frames):
+            self.frame_index = 0
+        self.image = self.frames[-int(self.frame_index)]
+
         self.pos.y += self.direction * self.move_speed * dt
         self.rect.x = round(self.pos.x)
         self.rect.y = round(self.pos.y)
@@ -197,29 +253,43 @@ class Target(pygame.sprite.Sprite):
             return NotImplemented
 
     def update(self, dt):
-        if self.animation:
-            if self.animation == Target.ANIMATION_SHOOTED:
-                self.animate_shooted(dt)
-            elif self.animation == Target.ANIMATION_DISAPPEARED:
+        if self.animation == Target.ANIMATION_SHOOTED:
+            self.animate_shooted(dt)
+        elif self.animation == Target.ANIMATION_IDLE:
+            if time.time() - self.created_at > self.disappear_after:
                 self.animate_disappeared(dt)
+            
 
 
 class Level1():
     def __init__(self):
+        # State
         self.state = "active"
         self.prev_time = time.time()
 
-        self.duration = 45
-        self.timer = Timer(Timer.ENDLEVEL, self.duration, 1)
-        random_gen_wait = random.uniform(0.1, 1.5)
-        Timer(Timer.GENERATETARGET, random_gen_wait, self.duration)
+        # HUD
+        self.load_hud()
         self.score = Score()
         self.bullets = Bullets(6)
 
+        # Duration and Events
+        self.duration = 45
+        self.timer = Timer(Timer.ENDLEVEL, self.duration, 1)
+        self.timer.init_text()
+
+        # Targets
         self.target_group = pygame.sprite.Group()
         self.generate_targets(Target.RED_ONE, 15)
+        Timer.delay_generate_targets()
 
-        crosshair.update_targets(self.target_group)
+    def load_hud(self):
+        self.background = pygame.image.load(".\\assets\\hud\\blue_background(1280x720).png").convert()
+        self.curtain_left = pygame.image.load(".\\assets\\hud\\curtain_left.png").convert_alpha()
+        self.curtain_right = pygame.image.load(".\\assets\\hud\\curtain_right.png").convert_alpha()
+        self.curtain_straight = pygame.image.load(".\\assets\\hud\\curtain_straight.png").convert_alpha()
+        self.curtain_top = pygame.image.load(".\\assets\\hud\\curtain_top.png").convert_alpha()
+        self.rifle = pygame.image.load(".\\assets\\hud\\rifle.png").convert_alpha()
+        self.table = pygame.image.load(".\\assets\\hud\\table.png").convert_alpha()
 
     def generate_targets(self, target_type, count):
         for target in range(count):
@@ -237,7 +307,7 @@ class Level1():
                 sys.exit()
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if self.bullets.used != self.bullets.max_used:
-                    self.score.update(crosshair.shoot())
+                    self.score.update(crosshair.shoot(self.target_group))
                     self.bullets.shooted(self.bullets.used)
                     self.bullets.used += 1
                 else:
@@ -251,24 +321,39 @@ class Level1():
                 self.state = "inactive"
             elif event.type == Timer.GENERATETARGET:
                 random.seed()
-                random_count = random.randint(1,2)
-                self.generate_targets(Target.RED_ONE, random_count)
-                random_gen_wait = random.uniform(0.1, 1.5)
-                Timer(Timer.GENERATETARGET, random_gen_wait, 0)
+                self.generate_targets(Target.RED_ONE, random.randint(1,2))
+                Timer.delay_generate_targets()
 
     def update(self):
         dt = time.time() - self.prev_time
         self.prev_time = time.time()
 
-        screen.blit(background,(0,0))
+        screen.blit(self.background,(0,0))
+
         self.target_group.update(dt)
         self.target_group.draw(screen)
+
+        screen.blit(self.table,(0,height-self.table.get_height()))
+        screen.blit(self.rifle,(self.table.get_rect().centerx, self.table.get_rect().centery+self.rifle.get_height()*1.25))
+        screen.blit(self.curtain_left,(0,50))
+        screen.blit(self.curtain_right,(width-self.curtain_right.get_width(),50))
+        screen.blit(self.curtain_top,((self.curtain_straight.get_width()-self.curtain_top.get_width())/2, self.curtain_straight.get_rect().centery+20))
+        screen.blit(self.curtain_straight,(0,0))
+
         self.bullets.draw(screen)
+        bonus_score = crosshair.bonus_score()
+        if bonus_score:
+            self.score.update(bonus_score)
+        if crosshair.bonus_text:
+            if time.time() - crosshair.bonus_text_created_at > 1.05:
+                crosshair.bonus_text_opacity -= 5
+                crosshair.bonus_text.image.set_alpha(crosshair.bonus_text_opacity)
+                crosshair.bonus_text.image.convert_alpha()
+            screen.blit(crosshair.bonus_text.image, crosshair.bonus_text.rect)
         self.score.draw(screen)
         self.timer.draw(screen)
         crosshair_group.update()
         crosshair_group.draw(screen)
-        #pygame.display.set_caption(str(clock.get_fps()))
         pygame.display.update()
 
 
@@ -284,7 +369,7 @@ class GameState():
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 pos = pygame.mouse.get_pos()
                 if play_text.rect.collidepoint(pos):
-                    crosshair.shoot()
+                    crosshair.gunshot.play()
                     self.state = "load_level"
                 elif exit_text.rect.collidepoint(pos):
                     pygame.quit()
@@ -294,6 +379,7 @@ class GameState():
         text_group.draw(screen)
         crosshair_group.draw(screen)
         crosshair_group.update()
+        #debug(clock.get_fps())
         pygame.display.flip()
     
     def load_level(self):
@@ -310,7 +396,6 @@ class GameState():
             self.level.update()
             if self.level.state == "inactive":
                 self.state = "intro"
-        
             
 
 # Display stretching prevention
@@ -327,8 +412,9 @@ screen = pygame.display.set_mode(size)
 
 # Intro
 distance_text = 45
-background = pygame.image.load(".\\assets\\main_menu_bg.png").convert()
+background = pygame.image.load(".\\assets\\hud\\blue_background(1280x720).png").convert()
 font = pygame.font.SysFont("Comic Sans MS", 56, True)
+font2 = pygame.font.SysFont("Comic Sans MS", 32, True)
 text_group = pygame.sprite.Group()
 play_text = Text("Play", font, (255,255,255), (width/2, (height/2)-distance_text))
 exit_text = Text("Exit", font, (255,255,255), (width/2, (height/2)+distance_text))
@@ -342,6 +428,12 @@ crosshair_group.add(crosshair)
 
 #Spritesheets
 red_target_frames = Spritesheet(".\\assets\\targets\\target2_spritesheet_360degree.png").get_frames(104, 190)
+target_to_score = {Target.RED_ONE: 10, Target.DUCK: 15}
+fun_text_templates = ["Wow!!", "You're crazy!", "GOD OF DUCKS?!?", "Sweet :)"]
+target_bonuses = {2: 5, 3: 10, 4: 15, 5: 25, 6: 50} # 2t - +5, 3t - +10, 4t - +15, 5t - +25
+target_multipliers_text = {2:"Two targets! +5 points!", 3:"Three targets! +10 points!", 
+                           4:"Four targets? +15 points!", 5:"FIVE TARGETS!! +25 points!",
+                           6:"SIX TARGETS?????? I have no words. +50 points"}
 
 
 while 1:
